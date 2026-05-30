@@ -1,0 +1,115 @@
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#define IN1_M1 8
+#define IN2_M1 10
+#define IN3_M2 6
+#define IN4_M2 7
+const char* BLE_DEVICE_NAME = "RobotTFG";
+static BLEUUID SERVICE_UUID("7b6a0001-6d14-4e4f-9f34-2f43f7b80001");
+static BLEUUID PWM_UUID("7b6a0002-6d14-4e4f-9f34-2f43f7b80001");
+void motorendevant() {
+  // Motor 1 adelante
+  digitalWrite(IN1_M1, HIGH);
+  //Serial.print("funciona1");
+  digitalWrite(IN2_M1, LOW);
+//Motor 2
+  digitalWrite(N3_M2, HIGH);
+  //Serial.print("funciona2");
+  digitalWrite(IN4_M2, LOW);
+}
+void motorparada() {
+  digitalWrite(IN1_M1, LOW);
+  digitalWrite(IN2_M1, LOW);
+
+  digitalWrite(IN3_M2, LOW);
+  digitalWrite(IN4_M2, LOW);
+}
+void motorenrere() {
+
+  digitalWrite(IN1_M1, LOW);
+  digitalWrite(IN2_M1, HIGH);
+  digitalWrite(IN3_M2, LOW);
+  digitalWrite(IN4_M2, HIGH);
+}
+void motordreta() {
+  digitalWrite(IN1_M1, LOW);
+  digitalWrite(IN2_M1, HIGH);
+
+  digitalWrite(IN3_M2, HIGH);
+  digitalWrite(IN4_M2, LOW);
+}
+void motoresquerra() {
+  digitalWrite(IN1_M1, HIGH);
+  digitalWrite(IN2_M1, LOW);
+
+  digitalWrite(IN3_M2, LOW);
+  digitalWrite(IN4_M2, HIGH);
+}
+
+class PwmCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* characteristic) {
+    String value = characteristic->getValue().c_str();
+    value.trim();
+    Serial.print("Recibido BLE: ");
+    Serial.println(value);
+    if (value=="1"){
+      motorendevant();
+      Serial.println("funciona1");
+    }
+    else if (value=="0"){
+      motorparada();
+      Serial.println("funciona0");
+    }
+    else if (value=="2"){
+      motoresquerra();
+      Serial.println("funciona2");
+    }
+    else if (value=="3"){
+      motordreta();
+      Serial.println("funciona3");
+    }
+    else if (value=="4"){
+      motorenrere();
+      Serial.println("funciona4");
+    }
+  }  
+    
+};
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  pinMode(IN1_M1, OUTPUT);
+  pinMode(IN2_M1, OUTPUT);
+  // Motor 2
+  pinMode(IN3_M2, OUTPUT);
+  pinMode(IN4_M2, OUTPUT);
+  BLEDevice::init(BLE_DEVICE_NAME);
+
+  BLEServer* server = BLEDevice::createServer();
+  BLEService* service = server->createService(SERVICE_UUID);
+
+  BLECharacteristic* pwmCharacteristic = service->createCharacteristic(
+    PWM_UUID,
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_WRITE |
+    BLECharacteristic::PROPERTY_WRITE_NR
+  );
+
+  pwmCharacteristic->setValue("0");
+  pwmCharacteristic->setCallbacks(new PwmCallbacks());
+
+  service->start();
+
+  BLEAdvertising* advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(SERVICE_UUID);
+  advertising->setScanResponse(true);
+
+  BLEDevice::startAdvertising();
+
+  Serial.println("BLE listo. Busca RobotPWM.");
+}
+void loop() {
+
+  delay(1000);
+}
