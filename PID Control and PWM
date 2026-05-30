@@ -1,0 +1,230 @@
+//parametres del motor i encoder 1
+#define IN1_M1 8
+#define IN2_M1 10
+#define ENC1_M1 1
+#define ENC2_M1 2
+//parametres motor i encoder 2
+#define IN3_M2 6
+#define IN4_M2 7
+#define ENC1_M2 4
+#define ENC2_M2 5
+//velocitats desitjades de les rodes 
+float velocitat_desitjada_esquerra = 0.05f;
+float velocitat_desitjada_dreta = 0.05f;
+
+const int PPR = 8344; //pulsos per revolucio del encoder
+const float circumf_roda = 0.0942f; //la circunferencia de la roda en metres tenint en compte el radi de 32 cm
+const bool invertir_encoder_esquerr = false;//si van al reves girar
+const bool invertir_encoder_dreta = false;
+const bool invertir_motor_esquerra = false;
+const bool invertir_motor_dreta = false;
+//pid
+const unsigned long periode_PID= 50;//cada quants milisegons es calcula
+const int pwm_max= 250;//maxim pwm
+const int pwm_minim= 160;//pwm minim 
+
+float KP = 150.0f;//correccio al error
+float KI = 0.0f;//per corregir error acumulat 
+float KD = 0.0f;//suavitzar canvis rapids
+
+
+volatile long pulsos_esquerra = 0;//contador pulsos encoder1
+volatile long pulsos_dreta = 0;//contador pulsos encoder2
+
+float velocitat_v_esquerra = 0.0f;//mesura velocitat roda esquerra en m/s
+float velocitat_v_dreta = 0.0f;//velocitat en la roda dreta
+float rpmesquerra = 0.0f;//velocitats en rpm
+float rpmdreta = 0.0f;
+
+float integralesquerra = 0.0f;//per guardar l'error acumulat
+float integraldreta = 0.0f;
+float previousErrorLeft = 0.0f;//per calcular la derivada
+float previousErrorRight = 0.0f;
+
+unsigned long ultimPID = 0; //per sber lultima vegada que es va calcular el PID
+
+
+void IRAM_ATTR contador_pulsos_esquerra()//cada vegada que el encoder esquerra detecti un puls
+{
+  int b = digitalRead(ENC2_M1);//llegueix el canal b per saber la direccio
+  int dirreccio= b ? 1 : -1;//si esta alt es suma sino es resta
+  pulsos_esquerra += invertir_encoder_esquerr ? -dirreccio : dirreccio;//suma o resta pulsos depenent de la direccio
+}
+
+void IRAM_ATTR contador_pulsos_dreta()
+{
+  int b = digitalRead(ENC2_M2);
+  int dirreccio = b ? 1 : -1;
+  pulsos_dreta += invertir_encoder_dreta ? -dirreccio : dirreccio;
+}
+
+void control_motor(int in1, int in2, int pwm)//conte eks pins del driver i el valor pwm
+{
+  pwm = constrain(pwm, -pwm_max, pwm_max);//que el pwm no sigui mes gran al limit
+
+  if (pwm > 0) {//per girar en un sentit quan el pwm es positiu
+    analogWrite(in1, pwm);
+    analogWrite(in2, 0);
+  } else if (pwm < 0) {//en sentit contrari si es negatiu
+    analogWrite(in1, 0);
+    analogWrite(in2, -pwm);
+  } else {//el motor es para si no hi ha pwm
+    analogWrite(in1, 0);
+    analogWrite(in2, 0);
+  }
+}
+
+void anar_esquerra(int pwm)
+{
+  if (invertir_motor_esquerra) {//aplicar pwm a la roda esquerra 
+    pwm = -pwm;
+  }
+  control_motor(IN1_M1, IN2_M1, pwm);
+}
+
+void anar_dreta(int pwm)
+{
+  if (invertir_motor_dreta) {
+    pwm = -pwm;
+  }
+  control_motor(IN3_M2, IN4_M2, pwm); 
+}
+
+void parada()
+{
+  anar_esquerra(0);
+  anar_dreta(0);
+}
+
+
+float pulsosaRPM(long pulsos, float dtSegons)
+{
+  return (60.0f * (float)pulsos) / ((float)PPR * dtSegons);//conversio dels pulsos mesurats durant un temps a rpm
+}
+
+float rpmaMps(float rpm)
+{
+  return (circumf_roda * rpm) / 60.0f;//rpm a m/s
+}
+
+int computePID(//funcion del pid
+  float mpsdesitjats, //els m/s que es volen aconseguir
+  float mpsmesurats, //els m/s reals
+  float& integral, //variable on es guarda lerror acumulat del pid
+  float& errorprevi, //variable on es guarda lerror anterior, calcula la derivada
+  float dtSegons
+)
+{
+  float error = mpsdesitjats - mpsmesurats; //error de la velocitat desitjada menys la real
+
+  integral += error * dtSegons; //suma lerror acumulat en el temps
+  integral = constrain(integral, -0.30f, 0.30f);//limita la integral per que no creixi masa
+
+  float derivada = (error - errorprevi) / dtSegons;//calcul derivada, si lerror canvia molt rapid lo suaviza
+  errorprevi = error;//guarda el error
+  float output = KP * error + KI * integral + KD * derivada;//calcula la sortida del error
+  int pwm = constrain((int)output, -pwm_max, pwm_max);//limita pwm
+
+  if (mpsdesitjats > 0.001f && pwm > 0 && pwm < pwm_minim) {//comprueba velocidad positiva y si el pwm es demasiado pequeño
+    pwm = pwm_minim;//si es pequeño lo sube al minimo
+  }
+  if (mpsdesitjats < -0.001f && pwm < 0 && pwm > -pwm_minim) {//lo mismo para ir hacia atras
+    pwm = -pwm_minim;
+  }
+
+  return pwm;
+}
+
+void updatePID()
+{
+  unsigned long ara= millis();
+  unsigned long dtMs = ara - ultimPID;//calcul ultima vegada que s'ha fet el pid
+
+  if (dtMs < periode_PID) {//calcul pid cada 50ms
+    return;
+  }
+
+  ultimPID = ara;
+  float dtSegons = dtMs / 1000.0f;
+
+  long pulsosesq;
+  long pulsosdret;
+
+  noInterrupts();
+  pulsosesq = pulsos_esquerra; //guarda els pulsos contats
+  pulsos_esquerra = 0;//els reinicia 
+  pulsosdret = pulsos_dreta;
+  pulsos_dreta = 0;
+  interrupts();
+
+  rpmesquerra = pulsosaRPM(pulsosesq, dtSegons);//calcul pulsos a rpm
+  rpmdreta = pulsosaRPM(pulsosdret, dtSegons);
+
+  velocitat_v_esquerra = rpmaMps(rpmesquerra);//rpm a m/s
+  velocitat_v_dreta = rpmaMps(rpmdreta);
+
+  int pwmesq = computePID( //calcul pwm necessari per la roda utilit la funcion pid
+    velocitat_desitjada_esquerra,
+    velocitat_v_esquerra,
+    integralesquerra,
+    previousErrorLeft,
+    dtSegons
+  );
+
+  int pwmdret = computePID(
+    velocitat_desitjada_dreta,
+    velocitat_v_dreta,
+    integraldreta,
+    previousErrorRight,
+    dtSegons
+  );
+
+  anar_esquerra(pwmesq);//aplica pwm calculat al motor 
+  anar_dreta(pwmdret);
+
+  static unsigned long lastPrint = 0;//calcul utlima vegada que es veu al serial 
+  if (millis() - lastPrint >= 500) {
+    lastPrint = millis();
+
+    Serial.print("Desitjat E/D: ");
+    Serial.print(velocitat_desitjada_esquerra, 3);
+    Serial.print(" / ");
+    Serial.print(velocitat_desitjada_dreta, 3);
+
+    Serial.print("  Mesura E/D: ");
+    Serial.print(velocitat_v_esquerra, 3);
+    Serial.print(" / ");
+    Serial.print(velocitat_v_dreta, 3);
+
+    Serial.print("  PWM E/D: ");
+    Serial.print(pwmesq);
+    Serial.print(" / ");
+    Serial.println(pwmdret);
+  }
+}
+
+void setup()
+{
+  Serial.begin(115200);
+
+  pinMode(IN1_M1, OUTPUT);
+  pinMode(IN2_M1, OUTPUT);
+  pinMode(IN3_M2, OUTPUT);
+  pinMode(IN4_M2, OUTPUT);
+
+  pinMode(ENC1_M1, INPUT_PULLUP);
+  pinMode(ENC2_M1, INPUT_PULLUP);
+  pinMode(ENC1_M2, INPUT_PULLUP);
+  pinMode(ENC2_M2, INPUT_PULLUP);
+
+  attachInterrupt(digitalPinToInterrupt(ENC1_M1), contador_pulsos_esquerra, RISING);
+  attachInterrupt(digitalPinToInterrupt(ENC1_M2), contador_pulsos_dreta, RISING);
+
+  parada();
+  ultimPID= millis();
+}
+
+void loop()
+{
+  updatePID();
+}
