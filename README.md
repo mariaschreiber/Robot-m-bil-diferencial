@@ -18,6 +18,11 @@ Prova de l'enviament de velocitats desitjades i control PID
 
 https://github.com/user-attachments/assets/69eff3d1-5e10-48b5-b287-5c44df89837b
 
+Funcionament final:
+
+
+https://github.com/user-attachments/assets/01efd012-0e7d-478c-902c-1b61c7b0d46c
+
 
 
 
